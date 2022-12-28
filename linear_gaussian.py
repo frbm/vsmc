@@ -12,26 +12,54 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         super().__init__(dx, dy, alpha, r, obs, n, t, scale)
 
     def generate_data(self, t=5):
+        """
+        Generates simulated data for a linear Gaussian hidden state model
+
+        Returns the tensors x and y which contain the simulated hidden states and the simulated observations respectively
+        """
         mu_0, s_0, a, q, c, rr = self.model_params
+        # retrieves the model parameters stored in the model_params attribute of the object. These parameters are:
+        # mu_0: the mean of the initial state.
+        # s_0: the covariance of the initial state.
+        # a: the transition matrix of the hidden state.
+        # q: covariance matrix of the hidden state
+        # c: measurement matrix of the model
+        # rr: multiplication of the covariance matrix of the observation r by an identity matrix of size dy
+
         dx = mu_0.size(0)
+        # recovers the dimension of the hidden state using the size of the tensor mu_0 (which corresponds to the average of the initial state)
         dy = rr.size(0)
+        # the size of the observation is determined by the size of the tensor rr (which corresponds to the covariance of the observation)
 
         x = torch.zeros((t, dx))
+        # will store the simulated hidden states
         y = torch.zeros((t, dy))
+        # will store the simulated observations
 
         for s in range(t):
             if s > 0:
+                # checks if the current time step is greater than 0
+                # if it is, it means that the hidden state is already defined and that it can be used to simulate the following state
                 mean = torch.matmul(a, x[s - 1, :])
+                # average of the next state using the transition matrix a and the previous state x[s - 1, :]
                 dist = MultivariateNormal(loc=mean, covariance_matrix=q)
+                # creates a Gaussian multivariate distribution from the mean and covariance calculated previously
                 x[s, :] = dist.rsample()
+                # draws a sample of the next state from the multivariate Gaussian distribution created earlier
             else:
                 dist = MultivariateNormal(loc=mu_0, covariance_matrix=s_0)
+                # creates a Gaussian multivariate distribution from the mean and covariance of the initial state (mu_0 and s_0)
                 x[s, :] = dist.rsample()
+                # draws a sample of the initial state from the multivariate Gaussian distribution created previously
 
             mean = torch.matmul(c, x[s, :])
+            # computes the average of the next observation using the projection matrix c and the current state x[s, :]
             dist = MultivariateNormal(loc=mean, covariance_matrix=rr)
+            # creates a Gaussian multivariate distribution from the mean and covariance of the observation (mean and rr)
             y[s, :] = dist.rsample()
+            # draws a sample of the following observation from the multivariate Gaussian distribution created earlier
 
+        # returns the tensors x and y which contain the simulated hidden states and the simulated observations respectively
         return x, y
 
     def log_marginal_likelihood(self, t, y):
@@ -58,7 +86,9 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
             p_fil = p_pred - torch.matmul(k, torch.matmul(c, p_pred))
 
             sgn, log_det = torch.linalg.slogdet(b)
-            log_likelihood -= 0.5 * (torch.sum(y_s * torch.linalg.solve(b, y_s)) + log_det + dy * log(2 * pi))
+            log_likelihood -= 0.5 * \
+                (torch.sum(y_s * torch.linalg.solve(b, y_s)) +
+                 log_det + dy * log(2 * pi))
 
         return log_likelihood
 
@@ -72,7 +102,9 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         test2 = x - mu
         test1 = torch.matmul(p_rec, (x - mu).T)
 
-        log_norm = log_norm - 0.5 * torch.sum(torch.mul((x - mu), torch.matmul(p_rec, (x - mu).T).T), dim=1)
+        log_norm = log_norm - 0.5 * \
+            torch.sum(
+                torch.mul((x - mu), torch.matmul(p_rec, (x - mu).T).T), dim=1)
         return log_norm
 
     def helper(self, t, x_p):

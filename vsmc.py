@@ -69,7 +69,7 @@ class VariationalSMC:
         t: the number of time steps for which the PKF must be executed
         dx: the number of dimensions of the hidden state of the model
         scale (optional, default value 0.5): a scaling coefficient used to generate random values for the parameters of the proposal
-        
+
         Returns a list containing the parameters of the proposal initialized for each time step
         """
         out = []
@@ -108,7 +108,7 @@ class VariationalSMC:
         # generates a vector of random values (noisy x -> x)
         # returns the index of the bin into which each u value falls
         # thus, using the cumulative sum of weights as "bins", we can select particle points based on their weights
-        return torch.bucketize(u, bins) 
+        return torch.bucketize(u, bins)
 
     def forward(self, y, adaptive_resampling=False, verbose=True):
         """VSMC Lower Bound"""
@@ -143,7 +143,8 @@ class VariationalSMC:
                     # the log_z variable is also updated using the maximum value of the logarithms of the weights and the sum of the weights
                     ancestors = self.resampling(w)
                     xp = x[ancestors]
-                    log_z += torch.max(log_w) + torch.log(torch.sum(w)) - log(n)
+                    log_z += torch.max(log_w) + \
+                        torch.log(torch.sum(w)) - log(n)
                     log_w = torch.zeros(n)
                 else:
                     # the method does not sample and simply uses the current particle points to update the xp variable
@@ -189,7 +190,7 @@ class VariationalSMC:
             w /= w.sum()
             # normalizes the weights by dividing them by their sum
             ess = 1/torch.sum(torch.square(w))/n
-            # recalculates the effective support rate (ESS) of the particle points using the formula 
+            # recalculates the effective support rate (ESS) of the particle points using the formula
 
             if verbose:
                 # checks if the debugging information is enabled
@@ -208,10 +209,10 @@ class VariationalSMC:
     def sim_q(self, y, verbose=True):
         """
         Simulate hidden state trajectories of the model using the particle filter (PF)
-        
+
         y: observation data
         verbose: a boolean indicating whether or not debugging information should be displayed
-        
+
         Returns the path of the selected hidden state
         """
         # constants
