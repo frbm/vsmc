@@ -38,11 +38,11 @@ class VariationalSMC:
     @staticmethod
     def init_prop_params(t, dx, scale=0.5):
         out = []
-        for s in range(t):
+        for _ in range(t):
             bias = scale * torch.randn(dx)
             times = 1 + scale * torch.randn(dx)
             log_var = scale * torch.randn(dx)
-            out += [bias, times, log_var]
+            out += [bias.requires_grad_(True), times.requires_grad_(True), log_var.requires_grad_(True)]
         return out
 
     def generate_data(self, *args):
@@ -59,7 +59,7 @@ class VariationalSMC:
         u = (ind + torch.rand(n))/n
         return torch.bucketize(u, bins)
 
-    def forward(self, y, adaptive_resampling=False, verbose=True):
+    def forward(self, y, adaptive_resampling=False, verbose=False):
         """VSMC Lower Bound"""
         # constants
         t = y.size(0)
@@ -100,7 +100,7 @@ class VariationalSMC:
             else:
                 log_w = self.log_weights(s, x, xp, y)
             max_log_w = torch.max(log_w)
-            w = torch.exp(log_w - max_log_w)
+            w = torch.exp(log_w) / torch.exp(max_log_w)
 
             if adaptive_resampling:
                 if s == t - 1:
@@ -122,7 +122,7 @@ class VariationalSMC:
     def sim_prop(self, *args):
         raise NotImplementedError
 
-    def sim_q(self, y, verbose=True):
+    def sim_q(self, y, verbose=False):
         # constants
         t = y.size(0)
         dx = self.dx
@@ -135,27 +135,24 @@ class VariationalSMC:
 
         for s in range(t):
             # resampling
-            if t > 0:
+            if s > 0:
                 ancestors = self.resampling(w[:, s-1])
-                x[:, :s, :] = x[ancestors, :t, :]
+                x[:, :s, :] = x[ancestors, :s, :]
 
             # propagation
-            x[:, t, :] = self.sim_prop(t, x[:, s-1, :])
+            x[:, s, :] = self.sim_prop(s, x[:, s-1, :])
 
             # weighting
-            log_w = self.log_weights(t, x[:, t, :], x[:, s-1, :], y)
+            log_w = self.log_weights(s, x[:, s, :], x[:, s-1, :], y)
             max_log_w = torch.max(log_w)
-            w[:, t] = torch.exp(log_w - max_log_w)
-            w[:, t] /= w[:, t].sum()
-            ess[t] = 1/torch.sum(torch.square(w[:, t]))
+            w[:, s] = torch.exp(log_w - max_log_w)
+            w[:, s] /= w[:, s].sum()
+            ess[s] = 1/torch.sum(torch.square(w[:, s]))
 
         # sample from the empirical approximation
         bins = torch.cumsum(w[:, -1], dim=-1)
-        u = torch.rand()
-        print(u)
-        print(bins)
+        u = torch.rand(1)
         b = torch.bucketize(u, bins)
-        print(b)
 
         if verbose:
             print(f'Mean ESS: {ess.mean()}')
