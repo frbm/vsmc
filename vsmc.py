@@ -177,9 +177,8 @@ class VariationalSMC:
                 # of the weights based on the current and previous particle points x and xp and the observation data y
                 log_w = self.log_weights(s, x, xp, y)
             max_log_w = torch.max(log_w)
-
             # calculates the maximum value of the logarithms of the weights
-            w = torch.exp(log_w - max_log_w)
+            w = torch.exp(log_w) / torch.exp(max_log_w)
             # calculates the weights by exponentiating the logarithms of the weights and subtracting the maximum value
             # from the logarithms of the weights
 
