@@ -2,7 +2,7 @@ from math import pi
 from vsmc import *
 from torch.optim import Adam
 from torch.distributions.multivariate_normal import MultivariateNormal
-
+torch.autograd.set_detect_anomaly(True)
 
 torch.manual_seed(0)
 
@@ -98,6 +98,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         sgn, log_det = torch.linalg.slogdet(sigma)
         log_norm = - 0.5 * (dim * log(2 * pi) + log_det)
         p_rec = torch.linalg.inv(sigma)
+        log_norm = log_norm - 0.5 * torch.sum(torch.mul((x - mu), torch.matmul(p_rec, (x - mu).T).T), dim=1)
 
         test2 = x - mu
         test1 = torch.matmul(p_rec, (x - mu).T)
@@ -108,7 +109,6 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         return log_norm
 
     def helper(self, t, x_p):
-        print(t)
         mu_0, s_0, a, q, c, rr = self.model_params
         mu_t, lint, log_s2t = self.prop_params[(3*t):(3*t+3)]
         s2t = torch.exp(log_s2t)
@@ -147,7 +147,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
 
 
 if __name__ == '__main__':
-    # Model hyper-parametersf
+    # Model hyper-parameters
     t = 10
     dx = 5
     dy = 3
@@ -159,9 +159,9 @@ if __name__ == '__main__':
     scale = 0.5
     epochs = 1000
     lr = 0.001
-    printing_freq = 10
+    printing_freq = 100
 
-    n = 4
+    n = 6
 
     smc_model = LinearGaussianStateSpaceSMC(dx, dy, alpha, r, obs, n, t, scale)
 
@@ -186,8 +186,8 @@ if __name__ == '__main__':
             print(f'Current ELBO: {-loss.item()}.')
             print('')
 
-    print('True y:')
-    print(y_true)
+    print('True x:')
+    print(x_true)
     print('')
-    print('Simulated y:')
+    print('Simulated x:')
     print(smc_model.sim_q(y_true))
