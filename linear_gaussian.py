@@ -2,6 +2,7 @@ from math import pi
 from vsmc import *
 from torch.optim import Adam
 from torch.distributions.multivariate_normal import MultivariateNormal
+
 torch.autograd.set_detect_anomaly(True)
 
 torch.manual_seed(0)
@@ -12,7 +13,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         super().__init__(dx, dy, alpha, r, obs, n, t, scale)
 
     def generate_data(self, t=5):
-        mu_0, s_0, a, q, c, rr = self.model_params
+        mu_0, s_0, a, q, c, rr = self.all_params[:6]
         dx = mu_0.size(0)
         dy = rr.size(0)
 
@@ -35,7 +36,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         return x, y
 
     def log_marginal_likelihood(self, t, y):
-        mu_0, s_0, a, q, c, rr = self.model_params
+        mu_0, s_0, a, q, c, rr = self.all_params[:6]
         dx = mu_0.size(0)
         dy = rr.size(0)
 
@@ -72,8 +73,8 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         return log_norm
 
     def helper(self, t, x_p):
-        mu_0, s_0, a, q, c, rr = self.model_params
-        mu_t, lint, log_s2t = self.prop_params[(3*t):(3*t+3)]
+        mu_0, s_0, a, q, c, rr = self.all_params[:6]
+        mu_t, lint, log_s2t = self.all_params[(6 + 3 * t):(9 + 3 * t)]
         s2t = torch.exp(log_s2t)
 
         if t > 0:
@@ -87,7 +88,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         return self.log_normal(x_c, mu, torch.diag(s2t))
 
     def log_target(self, t, x_c, x_p, y):
-        mu_0, s_0, a, q, c, rr = self.model_params
+        mu_0, s_0, a, q, c, rr = self.all_params[:6]
 
         if t > 0:
             log_f = self.log_normal(x_c, torch.matmul(a, x_p.T).T, q)
@@ -103,7 +104,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
 
     def sim_prop(self, t, x_p):
         mu, s2t = self.helper(t, x_p)
-        return mu + torch.randn(*x_p.size()) * torch.sqrt(s2t)
+        return mu + torch.randn_like(x_p) * torch.sqrt(s2t)
 
     def objective(self, y, adaptive_resampling=False):
         return - self.forward(y, adaptive_resampling=adaptive_resampling)
@@ -122,13 +123,13 @@ if __name__ == '__main__':
     scale = 0.5
     epochs = 1000
     lr = 0.001
-    printing_freq = 100
+    printing_freq = 5
 
     n = 6
 
     smc_model = LinearGaussianStateSpaceSMC(dx, dy, alpha, r, obs, n, t, scale)
 
-    optimizer = Adam(smc_model.prop_params, lr=lr)
+    optimizer = Adam(smc_model.all_params, lr=lr)
 
     print("Generating data...")
     x_true, y_true = smc_model.generate_data(t)
@@ -138,7 +139,7 @@ if __name__ == '__main__':
     print('')
 
     # training loop
-    for epoch in range(1, epochs+1):
+    for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
         loss = smc_model.objective(y_true)
         loss.backward()
@@ -146,8 +147,8 @@ if __name__ == '__main__':
 
         if epoch % printing_freq == 0:
             print(f'Epoch {epoch} of {epochs}.')
-            print(f'Current ELBO: {-loss.item()}.')
-            print('')
+        print(f'Current ELBO: {-loss.item()}.')
+        print('')
 
     print('True x:')
     print(x_true)
