@@ -25,6 +25,7 @@ class VariationalSMC:
 
         self.model_params = self.init_model_params(dx, dy, alpha, r, obs)
         self.prop_params = self.init_prop_params(t, dx, scale)
+        self.all_params = self.model_params + self.prop_params
 
     @staticmethod
     def init_model_params(dx, dy, alpha, r, obs):
@@ -62,7 +63,7 @@ class VariationalSMC:
         # if obs is "non-sparse", otherwise it fills it with an identity matrix of size dy.
         rr = r * torch.eye(dy)
         # multiplies the covariance matrix of the observation r by an identity matrix of size dy
-        return mu_0, s_0, a, q, c, rr
+        return [mu_0, s_0, a, q, c, rr]
 
     @staticmethod
     def init_prop_params(t, dx, scale=0.5):
@@ -81,7 +82,7 @@ class VariationalSMC:
             # iterates on each time step for which the PKF must be executed
             bias = scale * torch.randn(dx)
             # random bias vector following a normal distribution of mean 0 and variance scale
-            times = 1 + scale * torch.randn(dx)
+            times = 1. + scale * torch.randn(dx)
             # generates a random "time" vector following a normal distribution of mean 1 and variance scale
             log_var = scale * torch.randn(dx)
             out += [bias.requires_grad_(True), times.requires_grad_(True), log_var.requires_grad_(True)]
@@ -95,7 +96,7 @@ class VariationalSMC:
     def log_marginal_likelihood(self, *args):
         raise NotImplementedError
 
-    @torch.no_grad()
+    @torch.no_grad()  # we call torch.no_grad() since torch.bucketize is not differentiable
     def resampling(self, w):
         """
         The resampling method is used to perform a stratified sampling of a set of particle points according to their
@@ -135,7 +136,7 @@ class VariationalSMC:
         w /= w.sum()
         log_z = 0.
         # store the value of the lower bound of variational SMC at each step
-        ess = 1 / torch.sum(torch.square(w)) / n
+        ess = 1. / torch.sum(torch.square(w)) / n
         # calculates the effective support rate (ESS) of the particle points
         for s in range(t):
             # resampling
@@ -156,13 +157,13 @@ class VariationalSMC:
                     log_w = torch.zeros(n)
                 else:
                     # the method does not sample and simply uses the current particle points to update the xp variable
-                    xp = x.clone()
+                    xp = x
             else:
-                if t > 0:
+                if s > 0:
                     ancestors = self.resampling(w)
                     xp = x[ancestors]
                 else:
-                    xp = x.clone()
+                    xp = x
 
             # propagation
             x = self.sim_prop(s, xp)
@@ -172,8 +173,7 @@ class VariationalSMC:
             if adaptive_resampling:
                 # checks if adaptive sampling is enabled
                 # if so, the method uses a different version of the log_weights function to update the logarithms of
-                # the weights based
-                # on the current and previous particle points x and xp and the observation data y
+                # the weights based on the current and previous particle points x and xp and the observation data y
                 log_w += self.log_weights(s, x, xp, y)
             else:
                 # if adaptive sampling is not enabled, the method uses the log_weights function to update the logarithms

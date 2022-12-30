@@ -2,6 +2,7 @@ from math import pi
 from vsmc import *
 from torch.optim import Adam
 from torch.distributions.multivariate_normal import MultivariateNormal
+
 torch.autograd.set_detect_anomaly(True)
 
 torch.manual_seed(0)
@@ -25,7 +26,6 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         # q: covariance matrix of the hidden state
         # c: measurement matrix of the model
         # rr: multiplication of the covariance matrix of the observation r by an identity matrix of size dy
-
         dx = mu_0.size(0)
         # recovers the dimension of the hidden state using the size of the tensor mu_0 (which corresponds to the average of the initial state)
         dy = rr.size(0)
@@ -171,6 +171,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         return self.log_normal(x_c, mu, torch.diag(s2t))
 
     def log_target(self, t, x_c, x_p, y):
+        mu_0, s_0, a, q, c, rr = self.all_params[:6]
         """
         Computes the log-likelihood of the model as a function of the observed data y, and the hidden state at time t, x_c, and
         the hidden state at the previous time, x_p
@@ -208,7 +209,7 @@ class LinearGaussianStateSpaceSMC(VariationalSMC):
         Simulates the propagation of the state at time t+1 according to the state at time t
         """
         mu, s2t = self.helper(t, x_p)
-        return mu + torch.randn(*x_p.size()) * torch.sqrt(s2t)
+        return mu + torch.randn_like(x_p) * torch.sqrt(s2t)
 
     def objective(self, y, adaptive_resampling=False):
         """
@@ -233,13 +234,13 @@ if __name__ == '__main__':
     scale = 0.5
     epochs = 1000
     lr = 0.001
-    printing_freq = 100
+    printing_freq = 5
 
     n = 6
 
     smc_model = LinearGaussianStateSpaceSMC(dx, dy, alpha, r, obs, n, t, scale)
 
-    optimizer = Adam(smc_model.prop_params, lr=lr)
+    optimizer = Adam(smc_model.all_params, lr=lr)
 
     print("Generating data...")
     x_true, y_true = smc_model.generate_data(t)
@@ -249,7 +250,7 @@ if __name__ == '__main__':
     print('')
 
     # training loop
-    for epoch in range(1, epochs+1):
+    for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
         loss = smc_model.objective(y_true)
         loss.backward()
@@ -257,8 +258,8 @@ if __name__ == '__main__':
 
         if epoch % printing_freq == 0:
             print(f'Epoch {epoch} of {epochs}.')
-            print(f'Current ELBO: {-loss.item()}.')
-            print('')
+        print(f'Current ELBO: {-loss.item()}.')
+        print('')
 
     print('True x:')
     print(x_true)
