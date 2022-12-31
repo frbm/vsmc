@@ -1,0 +1,118 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+
+
+class Block(nn.Module):
+    #I define a generic Block to get a better understanding of the architecture
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(Block, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        
+        self.transform = nn.Sequential(nn.Linear(input_dim, hidden_dim),
+                                       nn.Tanh(),
+                                       nn.Linear(hidden_dim, hidden_dim),
+                                       nn.Tanh())
+        
+        self.fc_mu = nn.Linear(hidden_dim, output_dim)
+        self.fc_logsigma = nn.Linear(hidden_dim, output_dim)
+    
+    def forward(self, x):
+        out = self.transform(x)
+        mu = self.fc_mu(out)
+        logsigma = self.fc_logsigma(out)
+        sigma = torch.exp(logsigma * 0.5 )
+        return mu, sigma
+    
+class PytorchIWAE(nn.Module):
+    def __init__(self, dim_h1, dim_h2, dim_x):
+        super(PytorchIWAE, self).__init__()
+
+        self.dim_h1 = dim_h1
+        self.dim_h2 = dim_h2
+        self.dim_x = dim_x
+
+        ### Encoder
+        
+        #q(h1|x) 
+        self.encoder_h1 = Block(dim_x, 200, dim_h1)
+        
+        #q(h2|h1) 
+        self.encoder_h2 = Block(dim_h1, 100, dim_h2)
+        
+        ### Decoder
+        
+        #p(h1|h2) 
+        self.decoder_h1 = Block(dim_h2, 100, dim_h1) 
+        
+        #p(x|h1) 
+        self.decoder_x =  nn.Sequential(nn.Linear(dim_h1, 200),
+                                        nn.Tanh(),
+                                        nn.Linear(200, 200),
+                                        nn.Tanh(),
+                                        nn.Linear(200, dim_x),
+                                        nn.Sigmoid())
+        
+    def encoder(self, x):
+        #Reparametrization trick
+        mu_h1, sigma_h1 = self.encoder_h1(x)
+        eps1 = torch.randn_like(sigma_h1)
+        h1 = mu_h1 + sigma_h1 * eps1
+        
+        mu_h2, sigma_h2 = self.encoder_h2(h1)
+        eps2 = torch.randn_like(sigma_h2)
+        h2 = mu_h2 + sigma_h2 * eps2
+        
+        return (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2)
+    
+    def decoder(self, h1, h2):
+        mu_h1, sigma_h1 = self.decoder_h1(h2)
+        eps = torch.randn_like(sigma_h1)
+        h1 = mu_h1 + sigma_h1 * eps
+        
+        p = self.decoder_x(h1)
+        
+        return (h1, mu_h1, sigma_h1), (p)
+    
+    def forward(self, x):
+        (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2) = self.encoder(x)
+        p = self.decoder(h2)        
+        
+        return ((h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2)), (p)
+
+    def calc_loss(self, inputs):
+        (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2) = self.encoder(inputs)
+        
+        # log_Qh1Gx = torch.sum(-0.5*((h1-mu_h1)/sigma_h1)**2 - torch.log(sigma_h1), -1)
+        # log_Qh2Gh1 = torch.sum(-0.5*((h2-mu_h2)/sigma_h2)**2 - torch.log(sigma_h2), -1)
+        
+        ### Calculating q(h1,h2|x)
+        #q(h1|x) 
+        log_Qh1Gx = torch.sum(-0.5*(eps1)**2 - torch.log(sigma_h1), -1)
+        #q(h2|h1) 
+        log_Qh2Gh1 = torch.sum(-0.5*(eps2)**2 - torch.log(sigma_h2), -1)
+        log_Qh1h2Gx = log_Qh1Gx + log_Qh2Gh1
+        
+        (h1, mu_h1, sigma_h1), (p) = self.decoder(h1, h2)
+        ### Calculating p(x,h1,h2)
+
+        #p(h2)
+        log_Ph2 = torch.sum(-0.5*h2**2, -1)
+        #p(h1|h2) 
+        log_Ph1Gh2 = torch.sum(-0.5*((h1-mu_h1)/sigma_h1)**2 - torch.log(sigma_h1), -1)
+        #p(x|h1) 
+        log_PxGh1 = torch.sum(inputs*torch.log(p) + (1-inputs)*torch.log(1-p), -1)
+        log_Pxh1h2 = log_Ph2 + log_Ph1Gh2 + log_PxGh1
+
+        # Weighting according to equation 13 from IWAE paper
+        log_weight = (log_Pxh1h2 - log_Qh1h2Gx).detach().data
+        log_weight = log_weight - torch.max(log_weight, 0)[0]
+        weight = torch.exp(log_weight)
+        weight = weight / torch.sum(weight, 0)
+        
+        loss = torch.mean(-torch.sum(weight * (log_Pxh1h2 - log_Qh1h2Gx), 0))
+        return loss
