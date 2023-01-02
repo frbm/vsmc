@@ -1,7 +1,9 @@
 from numpy import load
+import pandas
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from tqdm import tqdm
 
 
 # Define the RNN model
@@ -37,9 +39,27 @@ class ProposalDistribution(nn.Module):
     self.sigma_y = nn.Linear(input_size, hidden_size)
     
   def forward(self, x, y):
-      x_dist = torch.normal(mean=self.mu_x(x), std=torch.exp(self.sigma_x(x)))
-      y_dist = torch.normal(mean=self.mu_y(y), std=torch.exp(self.sigma_y(y)))
-      return torch.clip(x_dist * y_dist, 1e-5, 10)
+      # x_dist = torch.normal(mean=self.mu_x(x), std=torch.exp(self.sigma_x(x)))
+      # y_dist = torch.normal(mean=self.mu_y(y), std=torch.exp(self.sigma_y(y)))
+
+      def q(x, mean_x, mean_y, std_x, std_y):
+          return nn.GaussianNLLLoss()(x, mean_x, std_x) * nn.GaussianNLLLoss()(x, mean_y, std_y)
+
+      mean_x = self.mu_x(x)
+      mean_y = self.mu_y(y)
+      std_x = torch.exp(self.sigma_x(x))
+      std_y = torch.exp(self.sigma_y(y))
+
+      i = 0
+      X=[]
+      while i<x.shape[0]:
+        u = torch.rand(1)
+        xi = 2 * torch.rand(1) - 1
+        if u.detach().numpy()[0] >= q(xi, mean_x[i], mean_y[i], std_x[i], std_y[i]).detach().numpy():
+          X.append(xi)
+          i += 1
+      X = torch.Tensor(X)
+      return torch.clip(X, 1e-5, 10)
 
 def compute_loss_SMC(rnn_model, proposal_dist, particles, weights, y_t):
   # Compute the log likelihood of the observations under the model
@@ -56,7 +76,7 @@ def compute_loss_SMC(rnn_model, proposal_dist, particles, weights, y_t):
   loss = -(log_likelihood - log_proposal)
   return loss
 
-def compute_loss(data, rnn_model, proposal_dist, num_particles=10):
+def compute_loss(data, rnn_model, proposal_dist, num_particles=8):
   # Initialize the total loss
   total_loss = 0
   
@@ -95,18 +115,22 @@ def update_weights(rnn_model, optimizer, loss):
 
 
 if __name__ == '__main__':
-  n_epochs = 100
+  n_epochs = 3
 
   path = "./data.npy"
 
   try:
-    data = torch.Tensor(load(path))
+    data = load(path)
+    data = data.reshape(data.shape[0]*data.shape[1], data.shape[2], data.shape[3])
+    data, data_test = data[:700], data[700:]
+    data_train = torch.Tensor(data)
+    data_test = torch.Tensor(data_test)
     # data = torch.normal(0, 1, (10, 10)) # replace with real data
   except:
     FileNotFoundError("File data.npy not found in vsmc")
   
-  input_size = data.shape[0]
-  hidden_size = 10
+  input_size = data.shape[1]
+  hidden_size = data.shape[1]
   output_size = data.shape[1]
 
   # Define the RNN model
@@ -118,16 +142,22 @@ if __name__ == '__main__':
   # Define the proposal distribution
   proposal_dist = ProposalDistribution(input_size, hidden_size)
 
-  # Define the optimizer
-  optimizer = optim.Adam(rnn_model.parameters(), lr=0.01)
+  # Retain the losses
+  hist_loss = []
 
   # Loop through the data and update the weights
   for epoch in range(n_epochs):
-    # Compute the loss
-    loss = compute_loss(data, rnn_model, proposal_dist, num_particles=8)
+    for i in range(data_train.shape[0]): #data_train.shape[2])):
+      data = data_train[:, :, i]
+      # Compute the loss
+      loss = compute_loss(data, rnn_model, proposal_dist, num_particles=8)
 
-    # Update the weights
-    update_weights(rnn_model, optimizer, loss)
+      # Update the weights
+      update_weights(rnn_model, optimizer, loss)
 
-    # Print the loss
-    print("Epoch: {}, Loss: {}".format(epoch, loss))
+      # Print the loss
+      print("Epoch: {}, Sample: {},  Loss: {}".format(epoch, i, loss))
+      hist_loss.append(loss.detach().numpy())
+
+  print(hist_loss)
+  pandas.DataFrame(hist_loss).to_csv("./dmm_training/dmm.csv")
