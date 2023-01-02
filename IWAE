@@ -133,5 +133,5 @@ class IWAE(nn.Module):
     def sim_q(self,y):
         
         (h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2) = self.encoder(y) 
-        return h1*h2
+        return h1.T @ h2
 
