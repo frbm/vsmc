@@ -147,7 +147,7 @@ if __name__ == '__main__':
 
   # Loop through the data and update the weights
   for epoch in range(n_epochs):
-    for i in range(data_train.shape[0]): #data_train.shape[2])):
+    for i in range(data_train.shape[2]): #data_train.shape[2])):
       data = data_train[:, :, i]
       # Compute the loss
       loss = compute_loss(data, rnn_model, proposal_dist, num_particles=8)
