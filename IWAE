@@ -24,13 +24,12 @@ class Block(nn.Module):
     def forward(self, x):
         out = self.transform(x)
         mu = self.fc_mu(out)
-        logsigma = self.fc_logsigma(out)
-        sigma = torch.exp(logsigma * 0.5 )
-        return mu, sigma
+        log_sigma = self.fc_logsigma(out)
+        return mu, log_sigma
     
-class PytorchIWAE(nn.Module):
+class IWAE(nn.Module):
     def __init__(self, dim_h1, dim_h2, dim_x):
-        super(PytorchIWAE, self).__init__()
+        super(IWAE, self).__init__()
 
         self.dim_h1 = dim_h1
         self.dim_h2 = dim_h2
@@ -38,18 +37,14 @@ class PytorchIWAE(nn.Module):
 
         ### Encoder
         
-        #q(h1|x) 
         self.encoder_h1 = Block(dim_x, 200, dim_h1)
         
-        #q(h2|h1) 
         self.encoder_h2 = Block(dim_h1, 100, dim_h2)
         
         ### Decoder
         
-        #p(h1|h2) 
         self.decoder_h1 = Block(dim_h2, 100, dim_h1) 
         
-        #p(x|h1) 
         self.decoder_x =  nn.Sequential(nn.Linear(dim_h1, 200),
                                         nn.Tanh(),
                                         nn.Linear(200, 200),
@@ -57,62 +52,86 @@ class PytorchIWAE(nn.Module):
                                         nn.Linear(200, dim_x),
                                         nn.Sigmoid())
         
-    def encoder(self, x):
+    def reparameterize(self, mu, log_sigma):
+        """
+        :param mu: mean from the encoder's latent space
+        :param log_var: log variance from the encoder's latent space
+        """
         #Reparametrization trick
-        mu_h1, sigma_h1 = self.encoder_h1(x)
-        eps1 = torch.randn_like(sigma_h1)
-        h1 = mu_h1 + sigma_h1 * eps1
+
+        sigma = torch.exp(0.5*log_sigma) # standard deviation
+        eps = torch.randn_like(sigma) # `randn_like` as we need the same size
+        sample = mu + (eps * sigma) # sampling as if coming from the input space
         
-        mu_h2, sigma_h2 = self.encoder_h2(h1)
-        eps2 = torch.randn_like(sigma_h2)
-        h2 = mu_h2 + sigma_h2 * eps2
+        return sample
+    
+    def encoder(self, x):
         
-        return (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2)
+        #q(h1|x) 
+        mu_h1, log_sigma_h1 = self.encoder_h1(x)
+        h1 = self.reparameterize(mu_h1, log_sigma_h1)
+        
+        #q(h2|h1) 
+        mu_h2, log_sigma_h2 = self.encoder_h2(h1)
+        h2 = self.reparameterize(mu_h2, log_sigma_h2)
+        
+        return (h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2)
     
     def decoder(self, h1, h2):
-        mu_h1, sigma_h1 = self.decoder_h1(h2)
-        eps = torch.randn_like(sigma_h1)
-        h1 = mu_h1 + sigma_h1 * eps
         
+        #p(h1|h2) 
+        mu_h1, log_sigma_h1 = self.decoder_h1(h2)
+        h1 = self.reparameterize(mu_h1, log_sigma_h1)
+        
+        # Only one parameter because it is a Bernoulli distribution
+        #p(x|h1) 
         p = self.decoder_x(h1)
         
-        return (h1, mu_h1, sigma_h1), (p)
+        return (h1, mu_h1, log_sigma_h1), (p)
     
     def forward(self, x):
-        (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2) = self.encoder(x)
-        p = self.decoder(h2)        
+        (h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2) = self.encoder(x) 
+        _, p = self.decoder(h1, h2)        
         
-        return ((h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2)), (p)
-
+        return ((h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2)), (p)    
+    
     def calc_loss(self, inputs):
-        (h1, mu_h1, sigma_h1, eps1), (h2, mu_h2, sigma_h2, eps2) = self.encoder(inputs)
-        
-        # log_Qh1Gx = torch.sum(-0.5*((h1-mu_h1)/sigma_h1)**2 - torch.log(sigma_h1), -1)
-        # log_Qh2Gh1 = torch.sum(-0.5*((h2-mu_h2)/sigma_h2)**2 - torch.log(sigma_h2), -1)
-        
+        (h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2) = self.encoder(inputs)
+                
         ### Calculating q(h1,h2|x)
-        #q(h1|x) 
-        log_Qh1Gx = torch.sum(-0.5*(eps1)**2 - torch.log(sigma_h1), -1)
-        #q(h2|h1) 
-        log_Qh2Gh1 = torch.sum(-0.5*(eps2)**2 - torch.log(sigma_h2), -1)
+        #log q(h1|x) 
+        log_Qh1Gx = torch.sum(- 0.5 * torch.log(2 * h1.new_tensor(np.pi))-0.5*((h1-mu_h1)/torch.exp(log_sigma_h1))**2 - log_sigma_h1, -1)
+
+        #log q(h2|h1) 
+        log_Qh2Gh1 = torch.sum(- 0.5 * torch.log(2 * h2.new_tensor(np.pi))-0.5*((h2-mu_h2)/torch.exp(log_sigma_h2))**2 - log_sigma_h2, -1)
+        
+        #log q(h2|x) = log q(h2|h1) + log q(h1|x) 
         log_Qh1h2Gx = log_Qh1Gx + log_Qh2Gh1
         
         (h1, mu_h1, sigma_h1), (p) = self.decoder(h1, h2)
+        
         ### Calculating p(x,h1,h2)
-
-        #p(h2)
+        #log p(h2)
         log_Ph2 = torch.sum(-0.5*h2**2, -1)
-        #p(h1|h2) 
-        log_Ph1Gh2 = torch.sum(-0.5*((h1-mu_h1)/sigma_h1)**2 - torch.log(sigma_h1), -1)
-        #p(x|h1) 
+        #log p(h1|h2) 
+        log_Ph1Gh2 = torch.sum(- 0.5 * torch.log(2 * h1.new_tensor(np.pi)) - 0.5*((h1-mu_h1)/torch.exp(log_sigma_h1))**2 - log_sigma_h1, -1)
+        #log p(x|h1) 
         log_PxGh1 = torch.sum(inputs*torch.log(p) + (1-inputs)*torch.log(1-p), -1)
+        
+        # log p(x,h1,h2) = log p(x|h1) + log p(h1|h2)  + log p(h2)
         log_Pxh1h2 = log_Ph2 + log_Ph1Gh2 + log_PxGh1
 
         # Weighting according to equation 13 from IWAE paper
-        log_weight = (log_Pxh1h2 - log_Qh1h2Gx).detach().data
+        log_weight = (log_Pxh1h2 - log_Qh1h2Gx)#.detach().data
         log_weight = log_weight - torch.max(log_weight, 0)[0]
         weight = torch.exp(log_weight)
         weight = weight / torch.sum(weight, 0)
         
-        loss = torch.mean(-torch.sum(weight * (log_Pxh1h2 - log_Qh1h2Gx), 0))
+        loss = -torch.mean(torch.sum(weight * (log_Pxh1h2 - log_Qh1h2Gx), 0))
         return loss
+    
+    def sim_q(self,y):
+        
+        (h1, mu_h1, log_sigma_h1), (h2, mu_h2, log_sigma_h2) = self.encoder(y) 
+        return h1*h2
+
