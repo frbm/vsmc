@@ -6,6 +6,8 @@
 
 ```training```: where the training history for the Linear Gaussian State-space (LGSSM) model is saved.
 
+```IWAE_Test on MNIST```: test the IWAE implementation of a classic dataset
+
 ## Files:
 ```IWAE.py```: IWAE implementation.
 
